@@ -25,6 +25,7 @@ bool processDwarf(Dwarf *dwarf);
 bool processCompileUnit(Dwarf::Entry *entry, Cpp::File *cpp);
 bool processVariable(Dwarf::Entry *entry, Cpp::Variable *var);
 bool processTypeAttr(Dwarf::Attribute *attr, Cpp::Type *type);
+bool processLocationAttr(Dwarf::Attribute* attr, std::vector<Cpp::LocationOp>* locationData);
 bool processLocationAttr(Dwarf::Attribute *attr, int *location);
 bool findUserType(Dwarf *dwarf, Elf32_Off ref, Cpp::UserType **u);
 bool processUserType(Dwarf::Entry *entry, Cpp::UserType *u);
@@ -51,6 +52,45 @@ static inline std::string toHexString(int x)
 bool error(std::string errorMessage) {
 	std::cout << "ERROR: " << errorMessage << std::endl;
 	return false;
+}
+
+void processVtable(Cpp::File* cpp) {
+	for (Cpp::Variable &var : cpp->variables) {
+		if (var.name.find("__vt__") == 0 && !var.type.isFundamentalType) {
+			char temp;
+			std::stringstream length;
+			int i;
+			for (i = var.name.find_last_of("__") + 1; i < var.name.size(); i++) {
+				temp = var.name[i];
+				if (temp >= '0' && temp <= '9') {
+					length << temp;
+				}
+				else {
+					break;
+				}
+			}
+
+			std::string lengthStr = length.str();
+			if (lengthStr.length() > 0) {
+				int lengthCount = std::stoi(lengthStr);
+				std::string className = var.name.substr(i, lengthCount);
+
+				bool found = false;
+				for (std::map<Dwarf::Entry*, Cpp::UserType*>::iterator iter = entryUTPairs.begin(); iter != entryUTPairs.end(); ++iter)
+				{
+					Dwarf::Entry* k = iter->first;
+					Cpp::UserType* value = iter->second;
+					if (value->name.compare(className) == 0) {
+						found = true;
+						value->classData->vTable = var.location;
+					}
+				}
+
+				if (found)
+					break;
+			}
+		}
+	}
 }
 
 int main(int argc, char **argv)
@@ -87,6 +127,11 @@ int main(int argc, char **argv)
 	if (!processDwarf(dwarf)) {
 		std::cout << "Failed to process DWARF data." << std::endl;
 		return 1;
+	}
+
+	for (Cpp::File* cpp : cppFiles)
+	{
+		processVtable(cpp);
 	}
 
 	std::cout << "Done converting DWARFv1 data!" << std::endl;
@@ -212,6 +257,12 @@ bool processDwarf(Dwarf *dwarf)
 	return true;
 }
 
+Dwarf* compareDwarf;
+bool FunctionCompare(Cpp::Function &fun1, Cpp::Function &fun2) {
+
+	return (compareDwarf->lineEntryMap.find(fun1.startAddress)->second.lineNumber > compareDwarf->lineEntryMap.find(fun2.startAddress)->second.lineNumber);
+}
+
 bool processCompileUnit(Dwarf::Entry *entry, Cpp::File *cpp)
 {
 	nameUTListPairs.clear();
@@ -304,7 +355,12 @@ bool processCompileUnit(Dwarf::Entry *entry, Cpp::File *cpp)
 	}
 
 	fixUserTypeNames();
-
+	if (entry->dwarf->lineEntryMap.size() > 0) {
+		compareDwarf = entry->dwarf;
+		std::sort(cpp->functions.begin(), cpp->functions.end(), FunctionCompare);
+		compareDwarf = nullptr;
+	}
+	std::reverse(cpp->functions.begin(), cpp->functions.end()); // Functions are in opposite order.
 	return true;
 }
 
@@ -320,6 +376,14 @@ bool processVariable(Dwarf::Entry *entry, Cpp::Variable *var)
 		{
 		case DW_AT_name:
 			var->name = attr->getString();
+			break;
+		case DW_AT_location:
+			if (!processLocationAttr(attr, &var->locationData))
+				return error(std::string("Failed to processLocationAttr for variable '").append(var->name).append("'."));
+			var->location = -1;
+			for (Cpp::LocationOp& op : var->locationData)
+				if (op.opcode == DW_OP_ADDR || op.opcode == DW_OP_CONST)
+					var->location = op.value;
 			break;
 		case DW_AT_fund_type:
 		case DW_AT_user_def_type:
@@ -395,29 +459,53 @@ bool processTypeAttr(Dwarf::Attribute *attr, Cpp::Type *type)
 	return true;
 }
 
-bool processLocationAttr(Dwarf::Attribute *attr, int *location)
+bool processLocationAttr(Dwarf::Attribute* attr, std::vector<Cpp::LocationOp>* locationData)
 {
-	// I don't really know how location is supposed to be handled,
-	// so I just look for a DW_OP_CONST and use that as the "location"
+	Dwarf* dwarf = attr->entry->dwarf;
 
-	Dwarf *dwarf = attr->entry->dwarf;
-
-	char *block = attr->getBlock();
-	char *end = block + attr->size;
+	char* start = attr->getBlock();
+	char* block = attr->getBlock();
+	char* end = block + attr->size;
 
 	while (block < end)
 	{
 		char op = dwarf->read<char>(block);
 		block += sizeof(char);
 
-		if (op == DW_OP_CONST)
-		{
-			*location = dwarf->read<Elf32_Word>(block);
-			break;
+		Cpp::LocationOp data;
+		data.opcode = op;
+
+		if (op == DW_OP_DEREF2 || op == DW_OP_DEREF4 || op == DW_OP_ADD) { // No data.
+			data.value = -1;
 		}
+		else {
+			data.value = dwarf->read<Elf32_Word>(block);
+			block += sizeof(Elf32_Word);
+		}
+		locationData->push_back(data);
 	}
 
 	return true;
+}
+
+bool processLocationAttr(Dwarf::Attribute *attr, int *location)
+{
+	// This isn't accurate usually. It's only accurate when used on static things.
+
+	Dwarf *dwarf = attr->entry->dwarf;
+
+	char *block = attr->getBlock();
+	char op = dwarf->read<char>(block);
+	block += sizeof(char);
+
+	if (op == DW_OP_CONST || op == DW_OP_ADDR)
+	{
+		*location = dwarf->read<Elf32_Word>(block);
+		return true;
+	}
+
+	*location = -1;
+	return false;
 }
 
 bool findUserType(Dwarf *dwarf, Elf32_Off ref, Cpp::UserType **u)
@@ -842,22 +930,24 @@ bool processFunction(Dwarf::Entry *entry, Cpp::Function *f)
 					else {
 						std::cout << "Couldn't find good type for '" << className << "'." << std::endl;
 					}*/
-						
 					
-					Cpp::UserType* type = nullptr;
+					bool found = false;
 					for (std::map<Dwarf::Entry*, Cpp::UserType*>::iterator iter = entryUTPairs.begin(); iter != entryUTPairs.end(); ++iter)
 					{
 						Dwarf::Entry* k = iter->first;
 						Cpp::UserType* value = iter->second;
 						if (value->name.compare(className) == 0) {
-							type = value;
-							break;
-						}
-					}
+							if (!found)
+								f->typeOwner = value;
+							value->classData->functions.push_back(*f);
+							found = true;
 
-					if (type != nullptr) {
-						f->typeOwner = type;
-						f->typeOwner->classData->functions.push_back(*f);
+							if (entry->dwarf->lineEntryMap.size() > 0) {
+								compareDwarf = entry->dwarf;
+								std::sort(value->classData->functions.begin(), value->classData->functions.end(), FunctionCompare);
+								compareDwarf = nullptr;
+							}
+						}
 					}
 				}
 			}

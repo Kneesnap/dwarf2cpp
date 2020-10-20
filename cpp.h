@@ -77,12 +77,20 @@ struct Type
 	static std::string ModifierToString(Modifier m);
 };
 
+struct LocationOp {
+	char opcode = 0;
+	int value = -1;
+};
+
 struct Variable
 {
 	std::string name;
+	int location;
 	bool isGlobal;
 	Type type;
+	std::vector<LocationOp> locationData;
 
+	std::string locationString();
 	std::string toString();
 };
 
@@ -129,6 +137,7 @@ struct ClassType
 	std::vector<Member> members;
 	std::vector<Inheritance> inheritances;
 	std::vector<Function> functions;
+	int vTable = -1;
 
 	std::string toNameString(std::string name, bool includeSize, bool includeInheritances);
 	std::string toBodyString(bool includeOffsets);

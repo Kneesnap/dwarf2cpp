@@ -59,28 +59,13 @@ std::string File::toString(bool justUserTypes, bool includeComments)
 	{
 		// Write variables
 		for (Variable &var : variables)
-		{
-			if (includeComments)
-			{
-				std::string globallocal = (var.isGlobal) ? "GLOBAL" : "LOCAL ";
-				ss << StarCommentToString(globallocal, false) << " ";
-			}
-			
-			ss << var.toString() << ";\n";
-		}
+			ss << var.toString() << "; // " << var.locationString() << "\n";
 
 		ss << "\n";
 
 		// Write function declarations
 		for (Function &fun : functions)
-		{
-			if (includeComments)
-			{
-				std::string globallocal = (fun.isGlobal) ? "GLOBAL" : "LOCAL ";
-				ss << StarCommentToString(globallocal, false) << " ";
-			}
 			ss << fun.toDeclarationString() << "\n";
-		}
 
 		ss << "\n";
 
@@ -102,8 +87,21 @@ std::string Type::toString(std::string varName) {
 
 	if (isFundamentalType) {
 		result << FundamentalTypeToString(fundamentalType);
-	} else if (userType->type == UserType::ARRAY) {
-		return userType->arrayData->toNameString(varName);
+	} else if (userType->type == UserType::ARRAY) { // TODO: Handle arrays properly. Figure out ptr to array vs array of ptr. Figure out if we need to do anything special. https://stackoverflow.com/questions/10007986/c-pass-an-array-by-reference
+		//return userType->arrayData->toNameString(varName);
+		for (Modifier mod : modifiers)
+			if (mod != Modifier::CONST && mod != Modifier::VOLATILE)
+				result << "_arraymod_" << ModifierToString(mod) << " ";
+		result << userType->arrayData->toNameString(varName);
+		return result.str();
+
+		// Array of pointers:
+		// int *array[3];
+
+		// Pointer to array:
+		// int array[3];
+		// int* arrayPtr;
+		// arrayPtr = &balance;
 	}
 	else if (userType->type == UserType::FUNCTION) {
 		return userType->functionData->toNameString(varName);
@@ -125,6 +123,50 @@ std::string Type::toString(std::string varName) {
 std::string Type::toString()
 {
 	return toString("");
+}
+
+std::string Variable::locationString()
+{
+	std::stringstream ss;
+	ss << (isGlobal ? "Global" : "Local");
+	ss << ", Address: " << toHexString(location);
+	ss << ", Loc Data: ";
+	for (LocationOp& op : locationData) {
+		bool show = true;
+		switch (op.opcode) {
+		case DW_OP_REG:
+			ss << "REG";
+			break;
+		case DW_OP_BASEREG:
+			ss << "BASEREG";
+			break;
+		case DW_OP_ADDR:
+			ss << "ADDR";
+			break;
+		case DW_OP_CONST:
+			ss << "CONST";
+			break;
+		case DW_OP_DEREF2:
+			ss << "DEREF2";
+			show = false;
+			break;
+		case DW_OP_DEREF4:
+			ss << "DEREF4";
+			show = false;
+			break;
+		case DW_OP_ADD:
+			ss << "ADD";
+			show = false;
+			break;
+		default:
+			ss << toHexString(op.opcode);
+			break;
+		}
+		if (show)
+			ss << "=" << std::to_string(op.value);
+		ss << " ";
+	}
+	return ss.str();
 }
 
 std::string Variable::toString()
@@ -253,10 +295,10 @@ std::string ClassType::toBodyString(bool includeOffsets)
 
 	if (functions.size() > 0) {
 		ss << "\n";
-		for (Function& fun : functions) {
+		for (Function& fun : functions)
 			ss << "\t" << fun.toDeclarationString() << "\n";
-		}
 	}
+	ss << "\t// vtable: " << toHexString(vTable) << "\n"; // TODO: TOSS
 
 	ss << "}";
 
@@ -340,6 +382,7 @@ std::string FunctionType::toNameString(std::string name)
 
 	// This isn't really a function pointer, but we'll print it as if it is
 	// DWARF is weird
+	// I believe this is a reference to a function defined somewhere else. The signature may not match precisely.
 	ss << returnType.toString() << "(*" << name << ")" << toParametersString();
 	return ss.str();
 }
@@ -394,12 +437,16 @@ std::string Function::toDeclarationString()
 std::string Function::toDefinitionString()
 {
 	std::stringstream ss;
-	ss << CommentToString(mangledName) <<
-		CommentToString("Start address: " + toHexString(startAddress)) <<
-		toNameString() << "\n{\n";
+	ss << CommentToString(mangledName + (mangledName.empty() ? "" : ", ") + (isGlobal ? "Global" : "Local"));
+	ss << CommentToString("Start address: " + toHexString(startAddress));
+	ss << toNameString() << "\n{\n";
 
-	for (Variable &v : variables)
-		ss << "\t" << v.toString() << ";\n";
+	for (Variable& v : variables) {
+		ss << "\t";
+		if (v.isGlobal)
+			ss << "static ";
+		ss << v.toString() << "; // " << v.locationString() << "\n";
+	}
 
 	// Save line numbers.
 	if (dwarf != nullptr) {
