@@ -388,20 +388,19 @@ std::string FunctionType::toNameString(std::string name)
 	return toGhidraString(name);
 }
 
+char NestChars[4] = { '@', '$', ':', '|' };
+static int funcDefNest = -1;
+
 std::string FunctionType::toGhidraString(std::string name) {
 	std::stringstream ss;
-	ss << (name.empty() ? "null" : name) << "@" << returnType.toString() << "@";
-	bool first = true;
-	for (FunctionType::Parameter& param : parameters) {
-		if (first) {
-			first = false;
-		}
-		else {
-			ss << ":";
-		}
-		ss << param.type.toString();
-	}
+	char separator;
 
+	separator = NestChars[++funcDefNest];
+	ss << (name.empty() ? "null" : name) << separator << returnType.toString();
+	for (FunctionType::Parameter& param : parameters)
+		ss << separator << param.type.toString();
+
+	funcDefNest--;
 	return ss.str();
 }
 
