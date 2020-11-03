@@ -298,7 +298,6 @@ std::string ClassType::toBodyString(bool includeOffsets)
 		for (Function& fun : functions)
 			ss << "\t" << fun.toDeclarationString() << "\n";
 	}
-	ss << "\t// vtable: " << toHexString(vTable) << "\n"; // TODO: TOSS
 
 	ss << "}";
 
@@ -416,7 +415,7 @@ std::string FunctionType::toParametersString()
 		ss << parameters[i].toString();
 
 		if (i != size - 1)
-			ss << ",";
+			ss << ", ";
 	}
 
 	ss << ")";
