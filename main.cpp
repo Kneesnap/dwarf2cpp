@@ -3,6 +3,7 @@
 #include "cpp.h"
 
 #include <string>
+#include <algorithm>
 #include <iostream>
 #include <fstream>
 #include <vector>
@@ -41,6 +42,7 @@ bool processLexicalBlock(Dwarf::Entry *entry, Cpp::Function *f);
 bool processArrayType(Dwarf::Entry *entry, Cpp::ArrayType *a);
 bool processSubscriptData(Dwarf::Attribute *attr, Cpp::ArrayType *a);
 void replaceChar(char *str, char ch, char newCh);
+void writeGhidraExport(Dwarf* dwarf, std::vector<Cpp::File*> files, filesystem::path path);
 
 static inline std::string toHexString(int x)
 {
@@ -56,11 +58,12 @@ bool error(std::string errorMessage) {
 
 void processVtable(Cpp::File* cpp) {
 	for (Cpp::Variable &var : cpp->variables) {
-		if (var.name.find("__vt__") == 0 && !var.type.isFundamentalType) {
+		if (var.name.find("__vt__") == 0) {
+
 			char temp;
 			std::stringstream length;
 			int i;
-			for (i = var.name.find_last_of("__") + 1; i < var.name.size(); i++) {
+			for (i = 6; i < var.name.size(); i++) {
 				temp = var.name[i];
 				if (temp >= '0' && temp <= '9') {
 					length << temp;
@@ -83,11 +86,9 @@ void processVtable(Cpp::File* cpp) {
 					if (value->name.compare(className) == 0) {
 						found = true;
 						value->classData->vTable = var.location;
+						value->classData->vTableSize = var.type.userType->classData->size;
 					}
 				}
-
-				if (found)
-					break;
 			}
 		}
 	}
@@ -159,6 +160,13 @@ int main(int argc, char **argv)
 		file << cpp->toString(false, false);
 		file.close();
 	}
+
+	filesystem::path filename("ghidra-export.txt");
+	filesystem::path path(outDirectory);
+	path /= filename.relative_path();
+	path = path.make_preferred();
+	writeGhidraExport(dwarf, cppFiles, path);
+	std::cout << "Exported Ghidra Mapping." << std::endl;
 
 	std::cout << "Done." << std::endl;
 
@@ -545,7 +553,7 @@ bool processUserType(Dwarf::Entry *entry, Cpp::UserType *userType)
 	case DW_TAG_union_type:
 		userType->type = (entry->tag == DW_TAG_structure_type) ? Cpp::UserType::STRUCT : ((entry->tag == DW_TAG_union_type) ? Cpp::UserType::UNION : Cpp::UserType::CLASS);
 		userType->classData = new Cpp::ClassType;
-		userType->classData->parent = userType;
+		userType->classData->holder = userType;
 
 		if (!processClassType(entry, userType->classData))
 			return error(std::string("Failed to processClassType for user type '").append(userType->name).append("'."));
@@ -1077,4 +1085,141 @@ void replaceChar(char *str, char ch, char newCh)
 			*str = newCh;
 		str++;
 	}
+}
+
+void writeGhidraExport(Dwarf* dwarf, std::vector<Cpp::File*> files, filesystem::path path) {
+	std::ofstream file(path);
+	for (Cpp::File* cpp : files) {
+		file << "# " << cpp->filename << std::endl;
+
+		// Types.
+		for (Cpp::UserType* type : cpp->userTypes) {
+			if (type->name.find("_anon") == 0 || type->name.find("_enum") == 0 || type->name.find("_class") == 0) {
+				type->name = cpp->filename.substr(cpp->filename.find_last_of('/') + 1) + type->name;
+				std::replace(type->name.begin(), type->name.end(), '.', '_');
+			}
+		}
+
+		for (Cpp::UserType* type : cpp->userTypes) {
+			switch (type->type) {
+			case Cpp::UserType::CLASS:
+				file << "class " << type->name << " " << std::to_string(type->classData->vTable) << " " << std::to_string(type->classData->vTableSize) << " ";
+
+				if (type->classData->inheritances.size() > 0) {
+					for (int i = 0; i < type->classData->inheritances.size(); i++) {
+						if (i > 0)
+							file << ";";
+						Cpp::ClassType::Inheritance& in = type->classData->inheritances[i];
+						file << in.type.toString() << "," << std::to_string(in.offset);
+					}
+				}
+				else {
+					file << "null";
+				}
+				file << " ";
+
+			case Cpp::UserType::STRUCT:
+				if (type->type == Cpp::UserType::STRUCT)
+					file << "struct " << type->name << " ";
+			case Cpp::UserType::UNION:
+				if (type->type == Cpp::UserType::UNION)
+					file << "union " << type->name << " ";
+
+				if (type->classData->members.size() > 0) {
+					for (int i = 0; i < type->classData->members.size(); i++) {
+						if (i > 0)
+							file << ";";
+						Cpp::ClassType::Member& in = type->classData->members[i];
+						file << in.name << "," << in.type.toString() << "," << std::to_string(in.offset) << "," << std::to_string(in.type.isFundamentalType || (in.type.userType->type != Cpp::UserType::CLASS && in.type.userType->type != Cpp::UserType::UNION && in.type.userType->type != Cpp::UserType::STRUCT) ? in.type.size() : in.type.userType->classData->size) << "," << std::to_string(in.bit_size) << "," << std::to_string(in.bit_offset);
+					}
+				}
+				else {
+					file << "null";
+				}
+
+				file << " " << std::to_string(type->classData->size);
+				break;
+			case Cpp::UserType::ENUM:
+				file << "enum " << type->name << " " << GetFundamentalTypeSize(type->enumData->baseType) << " ";
+				for (int i = 0; i < type->enumData->elements.size(); i++) {
+					if (i > 0)
+						file << ";";
+					Cpp::EnumType::Element &element = type->enumData->elements[i];
+					file << element.name << "=" << std::to_string(element.constValue);
+				}
+				break;
+			default:
+				continue;
+			}
+			file << std::endl;
+		}
+
+		// Variables.
+		for (Cpp::Variable &var : cpp->variables)
+			file << "var " << var.name << " " << toHexString(var.location) << " " << var.type.toString() << " " << (var.isGlobal ? "true" : "false") << std::endl;
+
+		// Functions.
+		for (Cpp::Function& func : cpp->functions) {
+			file << "func " << func.name
+				<< " " << (func.mangledName.empty() ? "null" : func.mangledName)
+				<< " " << toHexString(func.startAddress)
+				<< " " << func.returnType.toString()
+				<< " " << (func.typeOwner != nullptr ? func.typeOwner->name : "null")
+				<< " ";
+
+			// Parameters.
+			if (func.parameters.empty()) {
+				file << "null";
+			}
+			else {
+				for (int i = 0; i < func.parameters.size(); i++) {
+					if (i > 0)
+						file << ";";
+					Cpp::Function::Parameter& param = func.parameters[i];
+					file << param.type.toString() << "," << param.name;
+				}
+			}
+			file << " ";
+
+			// Local vars.
+			if (func.variables.empty()) {
+				file << "null";
+			}
+			else {
+				for (int i = 0; i < func.variables.size(); i++) {
+					if (i > 0)
+						file << ";";
+					Cpp::Variable& param = func.variables[i];
+					file << param.type.toString() << "," << param.name << "," << (param.isGlobal ? "true" : "false");
+					for (Cpp::LocationOp& op : param.locationData) {
+						file << "," << std::to_string(op.opcode);
+						if (op.opcode != DW_OP_DEREF2 && op.opcode != DW_OP_DEREF4 && op.opcode != DW_OP_ADD)
+							file << "=" << std::to_string(op.value);
+					}
+				}
+			}
+			file << " ";
+
+			// Line numbers.
+			std::multimap<int, Dwarf::LineEntry>::iterator lines = dwarf->lineEntryMap.find(func.startAddress);
+			if (lines != func.dwarf->lineEntryMap.end()) {
+				std::pair<std::multimap<int, Dwarf::LineEntry>::iterator, std::multimap<int, Dwarf::LineEntry>::iterator> ret;
+				ret = dwarf->lineEntryMap.equal_range(func.startAddress);
+				for (std::multimap<int, Dwarf::LineEntry>::iterator it = ret.first; it != ret.second; ++it) {
+					if (it != ret.first)
+						file << ";";
+					file << std::to_string(it->second.lineNumber) << "," << toHexString(it->second.hexAddressOffset);
+				}
+			}
+			else {
+				file << "null";
+			}
+				
+			file << std::endl;
+		}
+	}
+
+
+	// TODO: Figure out how we want to encode function signatures with names. Actually, it's good as is. Look for (*) in the string, and replace it with (*NAME) in the ghidra reader.
+	file.close();
 }

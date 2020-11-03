@@ -89,10 +89,10 @@ std::string Type::toString(std::string varName) {
 		result << FundamentalTypeToString(fundamentalType);
 	} else if (userType->type == UserType::ARRAY) { // TODO: Handle arrays properly. Figure out ptr to array vs array of ptr. Figure out if we need to do anything special. https://stackoverflow.com/questions/10007986/c-pass-an-array-by-reference
 		//return userType->arrayData->toNameString(varName);
+		result << userType->arrayData->toNameString("");
 		for (Modifier mod : modifiers)
 			if (mod != Modifier::CONST && mod != Modifier::VOLATILE)
-				result << "_arraymod_" << ModifierToString(mod) << " ";
-		result << userType->arrayData->toNameString(varName);
+				result << ModifierToString(mod);
 		return result.str();
 
 		// Array of pointers:
@@ -227,7 +227,7 @@ std::string UserType::toNameString(bool includeSize, bool includeInheritances)
 std::string ClassType::toNameString(std::string name, bool includeSize, bool includeInheritances)
 {
 	std::stringstream ss;
-	ss << std::string((parent->type == UserType::STRUCT) ? "struct " : ((parent->type == UserType::UNION) ? "union " : "class ")) << name;
+	ss << std::string((holder->type == UserType::STRUCT) ? "struct " : ((holder->type == UserType::UNION) ? "union " : "class ")) << name;
 
 	if (includeInheritances)
 	{
@@ -253,7 +253,7 @@ std::string ClassType::toBodyString(bool includeOffsets)
 	std::stringstream ss;
 	ss << "{\n";
 
-	bool includeUnions = (parent->type != UserType::UNION);
+	bool includeUnions = (holder->type != UserType::UNION);
 	int unionOffset = -1;
 
 	size_t size = members.size();
@@ -378,12 +378,30 @@ std::string ArrayType::toNameString(std::string name)
 
 std::string FunctionType::toNameString(std::string name)
 {
-	std::stringstream ss;
+	//std::stringstream ss;
 
 	// This isn't really a function pointer, but we'll print it as if it is
 	// DWARF is weird
 	// I believe this is a reference to a function defined somewhere else. The signature may not match precisely.
-	ss << returnType.toString() << "(*" << name << ")" << toParametersString();
+	//ss << returnType.toString() << "(*" << name << ")" << toParametersString();
+	//return ss.str();
+	return toGhidraString(name);
+}
+
+std::string FunctionType::toGhidraString(std::string name) {
+	std::stringstream ss;
+	ss << (name.empty() ? "null" : name) << "@" << returnType.toString() << "@";
+	bool first = true;
+	for (FunctionType::Parameter& param : parameters) {
+		if (first) {
+			first = false;
+		}
+		else {
+			ss << ":";
+		}
+		ss << param.type.toString();
+	}
+
 	return ss.str();
 }
 
@@ -399,7 +417,7 @@ std::string FunctionType::toParametersString()
 		ss << parameters[i].toString();
 
 		if (i != size - 1)
-			ss << ", ";
+			ss << ",";
 	}
 
 	ss << ")";
@@ -483,22 +501,22 @@ std::string FundamentalTypeToString(FundamentalType ft)
 	case FundamentalType::SIGNED_CHAR:
 		return "char";
 	case FundamentalType::UNSIGNED_CHAR:
-		return "unsigned char";
+		return "uchar";
 	case FundamentalType::SHORT:
 	case FundamentalType::SIGNED_SHORT:
 		return "short";
 	case FundamentalType::UNSIGNED_SHORT:
-		return "unsigned short";
+		return "ushort";
 	case FundamentalType::INT:
 	case FundamentalType::SIGNED_INT:
 		return "int";
 	case FundamentalType::UNSIGNED_INT:
-		return "unsigned int";
+		return "uint";
 	case FundamentalType::LONG:
 	case FundamentalType::SIGNED_LONG:
 		return "long";
 	case FundamentalType::UNSIGNED_LONG:
-		return "unsigned long";
+		return "ulong";
 	case FundamentalType::FLOAT:
 		return "float";
 	case FundamentalType::DOUBLE:
@@ -514,6 +532,8 @@ std::string FundamentalTypeToString(FundamentalType ft)
 		return "long long";
 	case FundamentalType::UNSIGNED_LONG_LONG:
 		return "unsigned long long";
+	case FundamentalType::ULONG_128:
+		return "ulonglong";
 	}
 
 	std::stringstream ss;
@@ -554,6 +574,7 @@ int GetFundamentalTypeSize(FundamentalType ft)
 	case FundamentalType::LONG_LONG:
 	case FundamentalType::SIGNED_LONG_LONG:
 	case FundamentalType::UNSIGNED_LONG_LONG:
+	case FundamentalType::ULONG_128:
 		return 8; // TODO: UNSURE
 	}
 

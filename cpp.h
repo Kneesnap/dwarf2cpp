@@ -39,7 +39,8 @@ enum FundamentalType
 	BOOL               = 0x15,
 	LONG_LONG          = 0x8008,
 	SIGNED_LONG_LONG   = 0x8108,
-	UNSIGNED_LONG_LONG = 0x8208
+	UNSIGNED_LONG_LONG = 0x8208,
+	ULONG_128          = 0xA510,
 };
 
 struct File
@@ -132,12 +133,13 @@ struct ClassType
 		Type type;
 	};
 
-	UserType* parent;
+	UserType* holder;
 	int size;
 	std::vector<Member> members;
 	std::vector<Inheritance> inheritances;
 	std::vector<Function> functions;
 	int vTable = -1;
+	int vTableSize = 0;
 
 	std::string toNameString(std::string name, bool includeSize, bool includeInheritances);
 	std::string toBodyString(bool includeOffsets);
@@ -189,6 +191,7 @@ struct FunctionType
 
 	std::string toNameString(std::string name);
 	std::string toParametersString();
+	std::string toGhidraString(std::string name);
 };
 
 struct Function : FunctionType
