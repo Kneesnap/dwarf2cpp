@@ -198,6 +198,7 @@ struct Function : FunctionType
 {
 
 	bool isGlobal;
+	bool isInstance = false;
 	std::string name;
 	std::string mangledName;
 	unsigned int startAddress;

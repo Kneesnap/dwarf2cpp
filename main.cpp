@@ -901,7 +901,9 @@ bool processFunction(Dwarf::Entry *entry, Cpp::Function *f)
 	}
 
 	f->typeOwner = nullptr;
+	f->isInstance = false;
 	if (f->parameters.size() > 0 && f->parameters[0].name.compare("this") == 0) {
+		f->isInstance = true;
 		f->typeOwner = f->parameters[0].type.userType;
 		f->parameters.erase(f->parameters.begin());
 		f->typeOwner->classData->functions.push_back(*f);
@@ -1165,6 +1167,7 @@ void writeGhidraExport(Dwarf* dwarf, std::vector<Cpp::File*> files, filesystem::
 				<< " " << toHexString(func.startAddress)
 				<< " " << func.returnType.toString()
 				<< " " << (func.typeOwner != nullptr ? func.typeOwner->name : "null")
+				<< " " << (func.isInstance ? "false" : "true")
 				<< " ";
 
 			// Parameters.

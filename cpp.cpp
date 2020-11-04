@@ -89,10 +89,14 @@ std::string Type::toString(std::string varName) {
 		result << FundamentalTypeToString(fundamentalType);
 	} else if (userType->type == UserType::ARRAY) { // TODO: Handle arrays properly. Figure out ptr to array vs array of ptr. Figure out if we need to do anything special. https://stackoverflow.com/questions/10007986/c-pass-an-array-by-reference
 		//return userType->arrayData->toNameString(varName);
-		result << userType->arrayData->toNameString("");
+
+		result << userType->arrayData->type.toString(varName);
 		for (Modifier mod : modifiers)
 			if (mod != Modifier::CONST && mod != Modifier::VOLATILE)
 				result << ModifierToString(mod);
+
+		for (Cpp::ArrayType::Dimension& d : userType->arrayData->dimensions)
+			result << "[" << std::to_string(d.size) << "]";
 		return result.str();
 
 		// Array of pointers:
@@ -431,6 +435,9 @@ std::string FunctionType::Parameter::toString()
 std::string Function::toNameString(bool skipNamespace)
 {
 	std::stringstream ss;
+	if (!isInstance && typeOwner != nullptr)
+		ss << "static ";
+
 	ss << returnType.toString() << " ";
 	if (typeOwner != nullptr && !skipNamespace)
 		ss << typeOwner->name << "::";
